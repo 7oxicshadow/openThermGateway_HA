@@ -43,6 +43,7 @@ bool wifiInitComplete = false;
 bool mqttInitComplete = false;
 
 unsigned long mqttinit_timenow = 0;
+unsigned long mqttrefresh_timenow = 0;
 
 unsigned long time_now = 0;
 unsigned long time_now_mqtt = 0;
@@ -145,6 +146,7 @@ void setup()
     //setup mqtt
     mqttclient.setServer(MQTT_SERVER, 1883);
     mqttclient.setCallback(mqtt_callback);
+    //mqttclient.setKeepAlive(3);
 
     //start master/slave interface
     mOT.begin(mHandleInterrupt);
@@ -192,72 +194,83 @@ void mqttProcessing(void)
   //Process MQTT messages if we have established a connection
   else
   {
-    mqttclient.loop();
-  
-    if(!regMQTTvars)
-    {
-        Serial.println("MQTT Sensor Config");
-        mqttclient.publish("homeassistant/binary_sensor/flame_state/config", "{\"name\": \"Flame State\", \"device_class\": \"heat\", \"state_topic\": \"homeassistant/binary_sensor/flame_state/state\", \"unique_id\": \"1\"}");
-        delay(20);
-        mqttclient.publish("homeassistant/sensor/temperature/config", "{\"name\": \"Temperature\", \"device_class\": \"temperature\", \"state_topic\": \"homeassistant/sensor/temperature/state\", \"unique_id\": \"2\"}");
-        delay(20);
-        mqttclient.publish("homeassistant/sensor/modulation/config", "{\"name\": \"Modulation\", \"device_class\": \"moisture\", \"state_topic\": \"homeassistant/sensor/modulation/state\", \"unique_id\": \"3\"}");
-        delay(20);
-        mqttclient.publish("homeassistant/sensor/returntemp/config", "{\"name\": \"Return Temperature\", \"device_class\": \"temperature\", \"state_topic\": \"homeassistant/sensor/returntemp/state\", \"unique_id\": \"4\"}");
-        delay(20);
-        mqttclient.publish("homeassistant/sensor/targetsetpoint/config", "{\"name\": \"Target Setpoint\", \"device_class\": \"temperature\", \"state_topic\": \"homeassistant/sensor/targetsetpoint/state\", \"unique_id\": \"5\"}");
-        delay(20);
-        mqttclient.publish("homeassistant/sensor/roomsetpoint/config", "{\"name\": \"Room Setpoint\", \"device_class\": \"temperature\", \"state_topic\": \"homeassistant/sensor/roomsetpoint/state\", \"unique_id\": \"6\"}");
-        delay(20);
-        mqttclient.publish("homeassistant/sensor/roomtemperature/config", "{\"name\": \"Room Temperature\", \"device_class\": \"temperature\", \"state_topic\": \"homeassistant/sensor/roomtemperature/state\", \"unique_id\": \"7\"}");
-        delay(20);        
-        mqttclient.publish("homeassistant/sensor/waterpressure/config", "{\"name\": \"Water Pressure\", \"device_class\": \"pressure\", \"state_topic\": \"homeassistant/sensor/waterpressure/state\", \"unique_id\": \"8\"}");
-        delay(20);
-        mqttclient.publish("homeassistant/sensor/dhwsetpoint/config", "{\"name\": \"DHW Setpoint\", \"device_class\": \"temperature\", \"state_topic\": \"homeassistant/sensor/dhwsetpoint/state\", \"unique_id\": \"9\"}");
-        delay(20);
-        mqttclient.publish("homeassistant/sensor/dhwtemperature/config", "{\"name\": \"DHW Temperature\", \"device_class\": \"temperature\", \"state_topic\": \"homeassistant/sensor/dhwtemperature/state\", \"unique_id\": \"10\"}");
-        regMQTTvars = true;
+    //check if we need to reconnect
+    if (!mqttclient.connected()) {
+      mqttInitComplete = false;
+      Serial.println("MQTT Connection Lost. Reconnecting...");
     }
-
-    //process mqtt on a timer
-    if(millis() > time_now_mqtt + 10000)
+    else
     {
+      mqttclient.loop();
 
-      sprintf(buf,"%f", boilerTemperature);
-      mqttclient.publish("homeassistant/sensor/temperature/state", buf);
+      //if(!regMQTTvars)
+      //this is a hack as the connected() function never reports anything other than connected...?
+      if(millis() > mqttrefresh_timenow)
+      {
+          Serial.println("MQTT Sensor Config");
+          mqttclient.publish("homeassistant/binary_sensor/flame_state/config", "{\"name\": \"Flame State\", \"device_class\": \"heat\", \"state_topic\": \"homeassistant/binary_sensor/flame_state/state\", \"unique_id\": \"1\"}");
+          delay(20);
+          mqttclient.publish("homeassistant/sensor/temperature/config", "{\"name\": \"Temperature\", \"device_class\": \"temperature\", \"state_topic\": \"homeassistant/sensor/temperature/state\", \"unique_id\": \"2\"}");
+          delay(20);
+          mqttclient.publish("homeassistant/sensor/modulation/config", "{\"name\": \"Modulation\", \"device_class\": \"moisture\", \"state_topic\": \"homeassistant/sensor/modulation/state\", \"unique_id\": \"3\"}");
+          delay(20);
+          mqttclient.publish("homeassistant/sensor/returntemp/config", "{\"name\": \"Return Temperature\", \"device_class\": \"temperature\", \"state_topic\": \"homeassistant/sensor/returntemp/state\", \"unique_id\": \"4\"}");
+          delay(20);
+          mqttclient.publish("homeassistant/sensor/targetsetpoint/config", "{\"name\": \"Target Setpoint\", \"device_class\": \"temperature\", \"state_topic\": \"homeassistant/sensor/targetsetpoint/state\", \"unique_id\": \"5\"}");
+          delay(20);
+          mqttclient.publish("homeassistant/sensor/roomsetpoint/config", "{\"name\": \"Room Setpoint\", \"device_class\": \"temperature\", \"state_topic\": \"homeassistant/sensor/roomsetpoint/state\", \"unique_id\": \"6\"}");
+          delay(20);
+          mqttclient.publish("homeassistant/sensor/roomtemperature/config", "{\"name\": \"Room Temperature\", \"device_class\": \"temperature\", \"state_topic\": \"homeassistant/sensor/roomtemperature/state\", \"unique_id\": \"7\"}");
+          delay(20);        
+          mqttclient.publish("homeassistant/sensor/waterpressure/config", "{\"name\": \"Water Pressure\", \"device_class\": \"pressure\", \"state_topic\": \"homeassistant/sensor/waterpressure/state\", \"unique_id\": \"8\"}");
+          delay(20);
+          mqttclient.publish("homeassistant/sensor/dhwsetpoint/config", "{\"name\": \"DHW Setpoint\", \"device_class\": \"temperature\", \"state_topic\": \"homeassistant/sensor/dhwsetpoint/state\", \"unique_id\": \"9\"}");
+          delay(20);
+          mqttclient.publish("homeassistant/sensor/dhwtemperature/config", "{\"name\": \"DHW Temperature\", \"device_class\": \"temperature\", \"state_topic\": \"homeassistant/sensor/dhwtemperature/state\", \"unique_id\": \"10\"}");
+          regMQTTvars = true;
+          mqttrefresh_timenow = millis() + 60000;
+      }
 
-      sprintf(buf,"%f", boilerRetTemperature);
-      mqttclient.publish("homeassistant/sensor/returntemp/state", buf);
+      //process mqtt on a timer
+      if(millis() > time_now_mqtt + 10000)
+      {
 
-      sprintf(buf,"%f", modulation);
-      mqttclient.publish("homeassistant/sensor/modulation/state", buf);
+        sprintf(buf,"%f", boilerTemperature);
+        mqttclient.publish("homeassistant/sensor/temperature/state", buf);
 
-      if(flameState > 0)
-          sprintf(buf,"ON");
-      else
-          sprintf(buf,"OFF");
+        sprintf(buf,"%f", boilerRetTemperature);
+        mqttclient.publish("homeassistant/sensor/returntemp/state", buf);
 
-      mqttclient.publish("homeassistant/binary_sensor/flame_state/state", buf);
+        sprintf(buf,"%f", modulation);
+        mqttclient.publish("homeassistant/sensor/modulation/state", buf);
 
-      sprintf(buf,"%f", targetSetpoint);
-      mqttclient.publish("homeassistant/sensor/targetsetpoint/state", buf);
+        if(flameState > 0)
+            sprintf(buf,"ON");
+        else
+            sprintf(buf,"OFF");
 
-      sprintf(buf,"%f", roomSetpoint);
-      mqttclient.publish("homeassistant/sensor/roomsetpoint/state", buf);   
+        mqttclient.publish("homeassistant/binary_sensor/flame_state/state", buf);
 
-      sprintf(buf,"%f", roomTemperature);
-      mqttclient.publish("homeassistant/sensor/roomtemperature/state", buf);    
+        sprintf(buf,"%f", targetSetpoint);
+        mqttclient.publish("homeassistant/sensor/targetsetpoint/state", buf);
 
-      sprintf(buf,"%f", waterPressure);
-      mqttclient.publish("homeassistant/sensor/waterpressure/state", buf);   
+        sprintf(buf,"%f", roomSetpoint);
+        mqttclient.publish("homeassistant/sensor/roomsetpoint/state", buf);   
 
-      sprintf(buf,"%f", dhwSetpoint);
-      mqttclient.publish("homeassistant/sensor/dhwsetpoint/state", buf);    
+        sprintf(buf,"%f", roomTemperature);
+        mqttclient.publish("homeassistant/sensor/roomtemperature/state", buf);    
 
-      sprintf(buf,"%f", dhwTemperature);
-      mqttclient.publish("homeassistant/sensor/dhwtemperature/state", buf);  
+        sprintf(buf,"%f", waterPressure);
+        mqttclient.publish("homeassistant/sensor/waterpressure/state", buf);   
 
-      time_now_mqtt = millis();
+        sprintf(buf,"%f", dhwSetpoint);
+        mqttclient.publish("homeassistant/sensor/dhwsetpoint/state", buf);    
+
+        sprintf(buf,"%f", dhwTemperature);
+        mqttclient.publish("homeassistant/sensor/dhwtemperature/state", buf);  
+
+        time_now_mqtt = millis();
+      }
     }
   }
 }
