@@ -40,10 +40,12 @@ int value = 0;
 int regMQTTvars = false;
 
 bool wifiInitComplete = false;
+bool wifiResetComplete = false;
 bool mqttInitComplete = false;
 
 unsigned long mqttinit_timenow = 0;
 unsigned long mqttrefresh_timenow = 0;
+unsigned long wifi_timenow = 0;
 
 unsigned long time_now = 0;
 unsigned long time_now_mqtt = 0;
@@ -61,6 +63,7 @@ static float roomTemperature;
 static float waterPressure;
 static float dhwSetpoint;
 static float dhwTemperature;
+static float outTemperature;
 
 OpenTherm mOT(mInPin, mOutPin);
 OpenTherm sOT(sInPin, sOutPin, true);
@@ -136,13 +139,6 @@ void setup()
 {
     Serial.begin(9600);	//9600 supported by OpenTherm Monitor App
 
-    // Begin WiFi
-    WiFi.begin(WIFI_SSID, WIFI_PASS);
-
-    // Connecting to WiFi...
-    Serial.print("Connecting to ");
-    Serial.print(WIFI_SSID);
-
     //setup mqtt
     mqttclient.setServer(MQTT_SERVER, 1883);
     mqttclient.setCallback(mqtt_callback);
@@ -155,15 +151,75 @@ void setup()
 
 void wifiProcessing(void)
 {
+  static uint8 state_u8 = 0;
+  static uint8 showInitState = false;
+
   // Check if we have connected to wifi
-  if ( (WiFi.status() == WL_CONNECTED) && (false == wifiInitComplete) )
+  if(true == wifiInitComplete) 
   {
-    // Connected to WiFi
-    Serial.println();
-    Serial.print("Connected! IP address: ");
-    Serial.println(WiFi.localIP());
-    wifiInitComplete = true;
+    if(false == showInitState)
+    {
+      // Connected to WiFi
+      Serial.println();
+      Serial.print("Connected! IP address: ");
+      Serial.println(WiFi.localIP());
+      showInitState = true;
+    }
   }
+  else
+  {
+    showInitState = false;
+    
+    switch(state_u8)
+    {
+      /* Attempt to connect */
+      case 0:
+      {
+        //Serial.println("1");
+        if (WiFi.status() != WL_CONNECTED)
+        {
+          // Begin WiFi
+          WiFi.begin(WIFI_SSID, WIFI_PASS);
+
+          // Connecting to WiFi...
+          Serial.print("Connecting to ");
+          Serial.print(WIFI_SSID);
+
+          wifi_timenow = (millis() + 30000);
+
+          wifiInitComplete = false;
+
+          state_u8++;
+        }
+      }
+      break;
+
+      /* Validate the connection */
+      case 1:
+      {
+        //Serial.println("2");
+        /* Check if we have are ready to check the status */
+        if(millis() > wifi_timenow)
+        {
+          if( WiFi.status() == WL_CONNECTED )
+          {
+            wifiInitComplete = true;
+            wifiResetComplete = true;
+          }
+
+          state_u8 = 0;
+        }
+      }
+      break;
+
+      default:
+      {
+        /* do nothing */
+      }
+    }
+
+  }
+
 }
 
 void mqttProcessing(void)
@@ -176,9 +232,10 @@ void mqttProcessing(void)
     if(millis() > mqttinit_timenow)
     {
       //process mqtt
-      if (!mqttclient.connected()) {
+      if (!mqttclient.connected() || (wifiResetComplete == true)) {
         reconnect_mqtt();
         regMQTTvars = false;
+        wifiResetComplete = false;
       }
 
       //check if a connection has been established
@@ -186,17 +243,19 @@ void mqttProcessing(void)
       {
           mqttInitComplete = true;
       }
-    }
 
-    //set the timer for the next attempt
-    mqttinit_timenow = (millis() + 5000);
+      //set the timer for the next attempt
+      mqttinit_timenow = (millis() + 5000);
+    }
   }
   //Process MQTT messages if we have established a connection
   else
   {
     //check if we need to reconnect
-    if (!mqttclient.connected()) {
+    if (!mqttclient.connected() || (wifiResetComplete == true)) {
       mqttInitComplete = false;
+      //set the timer for the next attempt
+      mqttinit_timenow = (millis() + 5000);
       Serial.println("MQTT Connection Lost. Reconnecting...");
     }
     else
@@ -227,6 +286,8 @@ void mqttProcessing(void)
           mqttclient.publish("homeassistant/sensor/dhwsetpoint/config", "{\"name\": \"DHW Setpoint\", \"device_class\": \"temperature\", \"state_topic\": \"homeassistant/sensor/dhwsetpoint/state\", \"unique_id\": \"9\"}");
           delay(20);
           mqttclient.publish("homeassistant/sensor/dhwtemperature/config", "{\"name\": \"DHW Temperature\", \"device_class\": \"temperature\", \"state_topic\": \"homeassistant/sensor/dhwtemperature/state\", \"unique_id\": \"10\"}");
+          delay(20);
+          mqttclient.publish("homeassistant/sensor/outtemperature/config", "{\"name\": \"OUT Temperature\", \"device_class\": \"temperature\", \"state_topic\": \"homeassistant/sensor/outtemperature/state\", \"unique_id\": \"11\"}");
           regMQTTvars = true;
           mqttrefresh_timenow = millis() + 60000;
       }
@@ -267,7 +328,10 @@ void mqttProcessing(void)
         mqttclient.publish("homeassistant/sensor/dhwsetpoint/state", buf);    
 
         sprintf(buf,"%f", dhwTemperature);
-        mqttclient.publish("homeassistant/sensor/dhwtemperature/state", buf);  
+        mqttclient.publish("homeassistant/sensor/dhwtemperature/state", buf);
+
+        sprintf(buf,"%f", outTemperature);
+        mqttclient.publish("homeassistant/sensor/outtemperature/state", buf);
 
         time_now_mqtt = millis();
       }
@@ -353,6 +417,11 @@ void loop()
         else if((pendingRequest & 0x00FF0000) == 0x001A0000)
         {
           dhwTemperature = mOT.getFloat(response);
+        }
+        /* pull the outside temperature from the boiler response */
+        else if((pendingRequest & 0x00FF0000) == 0x001B0000)
+        {
+          outTemperature = mOT.getFloat(response);
         }
         /* pull the DHW setpoint from the boiler response */
         else if((pendingRequest & 0x00FF0000) == 0x00380000)
@@ -444,12 +513,12 @@ void loop()
 
         case 4:
         {
-            //response = mOT.sendRequest(mOT.buildRequest(OpenThermRequestType::READ, OpenThermMessageID::TrSet, 0));
+            //response = mOT.sendRequest(mOT.buildRequest(OpenThermRequestType::READ, OpenThermMessageID::Toutside, 0));
             //temp_f = mOT.isValidResponse(response) ? mOT.getFloat(response) : 0;
 
             //if(temp_f != 0)
             //{
-            //    roomSetpoint = temp_f;
+            //    outTemperature = temp_f;
             //}
 
             //Serial.print("3: ");
