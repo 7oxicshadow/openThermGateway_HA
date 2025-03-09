@@ -11,6 +11,10 @@ http://ihormelnyk.com
 
 #include "credentials.h"
 
+#include "wifiProc.h"
+#include "mqttProc.h"
+#include "timeProc.h"
+
 //macro to disable print functions (comment out to disable)
 #define ENABLE_PRINT
 
@@ -25,45 +29,42 @@ http://ihormelnyk.com
   } Serial;
 #endif
 
+//const char* ntpServer = "pool.ntp.org";
+//const long  gmtOffset_sec = 0;
+//const int   daylightOffset_sec = 0; //3600;
+
 const int mInPin = 4; //for Arduino, 4 for ESP8266 (D2), 21 for ESP32
 const int mOutPin = 5; //for Arduino, 5 for ESP8266 (D1), 22 for ESP32
 
 const int sInPin = 12; //for Arduino, 12 for ESP8266 (D6), 19 for ESP32
 const int sOutPin = 13; //for Arduino, 13 for ESP8266 (D7), 23 for ESP32
 
-WiFiClient   espClient;
-PubSubClient mqttclient(espClient);
 unsigned long lastMsg = 0;
 #define MSG_BUFFER_SIZE  (50)
 char msg[MSG_BUFFER_SIZE];
 int value = 0;
-int regMQTTvars = false;
-
-bool wifiInitComplete = false;
-bool wifiResetComplete = false;
-bool mqttInitComplete = false;
-
-unsigned long mqttinit_timenow = 0;
-unsigned long mqttrefresh_timenow = 0;
-unsigned long wifi_timenow = 0;
 
 unsigned long time_now = 0;
-unsigned long time_now_mqtt = 0;
 unsigned long pendingRequest = 0;
+
+unsigned long timeBurnerActiveMins = 0;
+unsigned long prevBATime = 0;
+long timeBurnerActive_mS = 0;
+long tempTime_ms = 0;
 
 bool disable_int = false;
 
-static float boilerTemperature;
-static float boilerRetTemperature;
-static float modulation;
-static bool  flameState;
-static float targetSetpoint;
-static float roomSetpoint;
-static float roomTemperature;
-static float waterPressure;
-static float dhwSetpoint;
-static float dhwTemperature;
-static float outTemperature;
+float boilerTemperature;
+float boilerRetTemperature;
+float modulation;
+bool  flameState;
+float targetSetpoint;
+float roomSetpoint;
+float roomTemperature;
+float waterPressure;
+float dhwSetpoint;
+float dhwTemperature;
+float outTemperature;
 
 OpenTherm mOT(mInPin, mOutPin);
 OpenTherm sOT(sInPin, sOutPin, true);
@@ -91,252 +92,15 @@ void ot_processRequest(unsigned long request, OpenThermResponseStatus status) {
     //}
 }
 
-// Check for Message received on define topic for MQTT Broker
-void mqtt_callback(char* topic, byte* payload, unsigned int length) {
-  Serial.print("Message arrived [");
-  Serial.print(topic);
-  Serial.print("] ");
-  for (int i = 0; i < length; i++) {
-    Serial.print((char)payload[i]);
-  }
-  Serial.println();
-
-  // Switch on the LED if an 1 was received as first character
-  //if ((char)payload[0] == '1') {
-  //  digitalWrite(D2, LOW);   // Turn the LED on (Note that LOW is the voltage level
-    // but actually the LED is on; this is because
-    // it is active low on the ESP-01)
-  //} else {
-  //  digitalWrite(D2, HIGH);  // Turn the LED off by making the voltage HIGH
-  //}
-
-}
-
-void reconnect_mqtt() {
-  // Loop until we're reconnected
-  if (!mqttclient.connected()) {
-    Serial.print("Attempting MQTT connection...");
-    // Create a random client ID
-    String clientId = "ESP8266Client-";
-    clientId += String(random(0xffff), HEX);
-    // Attempt to connect
-    
-    if (mqttclient.connect(clientId.c_str(), "mqttuser", "mqttuser")) {
-      Serial.println("connected");
-      // Once connected, publish an announcement...
-      //mqttclient.publish("LEDTEST2", "hello world");
-      // ... and resubscribe
-      //mqttclient.subscribe("LEDTEST1");
-    } else {
-      Serial.print("failed, rc=");
-      Serial.print(mqttclient.state());
-      Serial.println(" try again in 5 seconds");
-    }
-  }
-}
-
 void setup()
 {
     Serial.begin(9600);	//9600 supported by OpenTherm Monitor App
 
-    //setup mqtt
-    mqttclient.setServer(MQTT_SERVER, 1883);
-    mqttclient.setCallback(mqtt_callback);
-    //mqttclient.setKeepAlive(3);
+    setupMqtt();
 
     //start master/slave interface
     mOT.begin(mHandleInterrupt);
     sOT.begin(sHandleInterrupt, ot_processRequest);
-}
-
-void wifiProcessing(void)
-{
-  static uint8 state_u8 = 0;
-  static uint8 showInitState = false;
-
-  // Check if we have connected to wifi
-  if(true == wifiInitComplete) 
-  {
-    if(false == showInitState)
-    {
-      // Connected to WiFi
-      Serial.println();
-      Serial.print("Connected! IP address: ");
-      Serial.println(WiFi.localIP());
-      showInitState = true;
-    }
-  }
-  else
-  {
-    showInitState = false;
-    
-    switch(state_u8)
-    {
-      /* Attempt to connect */
-      case 0:
-      {
-        //Serial.println("1");
-        if (WiFi.status() != WL_CONNECTED)
-        {
-          // Begin WiFi
-          WiFi.begin(WIFI_SSID, WIFI_PASS);
-
-          // Connecting to WiFi...
-          Serial.print("Connecting to ");
-          Serial.print(WIFI_SSID);
-
-          wifi_timenow = (millis() + 30000);
-
-          wifiInitComplete = false;
-
-          state_u8++;
-        }
-      }
-      break;
-
-      /* Validate the connection */
-      case 1:
-      {
-        //Serial.println("2");
-        /* Check if we have are ready to check the status */
-        if(millis() > wifi_timenow)
-        {
-          if( WiFi.status() == WL_CONNECTED )
-          {
-            wifiInitComplete = true;
-            wifiResetComplete = true;
-          }
-
-          state_u8 = 0;
-        }
-      }
-      break;
-
-      default:
-      {
-        /* do nothing */
-      }
-    }
-
-  }
-
-}
-
-void mqttProcessing(void)
-{
-  char buf[10];
-
-  //check if we have connected to mqtt
-  if(false == mqttInitComplete)
-  {
-    if(millis() > mqttinit_timenow)
-    {
-      //process mqtt
-      if (!mqttclient.connected() || (wifiResetComplete == true)) {
-        reconnect_mqtt();
-        regMQTTvars = false;
-        wifiResetComplete = false;
-      }
-
-      //check if a connection has been established
-      if(mqttclient.connected())
-      {
-          mqttInitComplete = true;
-      }
-
-      //set the timer for the next attempt
-      mqttinit_timenow = (millis() + 5000);
-    }
-  }
-  //Process MQTT messages if we have established a connection
-  else
-  {
-    //check if we need to reconnect
-    if (!mqttclient.connected() || (wifiResetComplete == true)) {
-      mqttInitComplete = false;
-      //set the timer for the next attempt
-      mqttinit_timenow = (millis() + 5000);
-      Serial.println("MQTT Connection Lost. Reconnecting...");
-    }
-    else
-    {
-      mqttclient.loop();
-
-      //if(!regMQTTvars)
-      //this is a hack as the connected() function never reports anything other than connected...?
-      if(millis() > mqttrefresh_timenow)
-      {
-          Serial.println("MQTT Sensor Config");
-          mqttclient.publish("homeassistant/binary_sensor/flame_state/config", "{\"name\": \"Flame State\", \"device_class\": \"heat\", \"state_topic\": \"homeassistant/binary_sensor/flame_state/state\", \"unique_id\": \"1\"}");
-          delay(20);
-          mqttclient.publish("homeassistant/sensor/temperature/config", "{\"name\": \"Temperature\", \"device_class\": \"temperature\", \"state_topic\": \"homeassistant/sensor/temperature/state\", \"unique_id\": \"2\"}");
-          delay(20);
-          mqttclient.publish("homeassistant/sensor/modulation/config", "{\"name\": \"Modulation\", \"device_class\": \"moisture\", \"state_topic\": \"homeassistant/sensor/modulation/state\", \"unique_id\": \"3\"}");
-          delay(20);
-          mqttclient.publish("homeassistant/sensor/returntemp/config", "{\"name\": \"Return Temperature\", \"device_class\": \"temperature\", \"state_topic\": \"homeassistant/sensor/returntemp/state\", \"unique_id\": \"4\"}");
-          delay(20);
-          mqttclient.publish("homeassistant/sensor/targetsetpoint/config", "{\"name\": \"Target Setpoint\", \"device_class\": \"temperature\", \"state_topic\": \"homeassistant/sensor/targetsetpoint/state\", \"unique_id\": \"5\"}");
-          delay(20);
-          mqttclient.publish("homeassistant/sensor/roomsetpoint/config", "{\"name\": \"Room Setpoint\", \"device_class\": \"temperature\", \"state_topic\": \"homeassistant/sensor/roomsetpoint/state\", \"unique_id\": \"6\"}");
-          delay(20);
-          mqttclient.publish("homeassistant/sensor/roomtemperature/config", "{\"name\": \"Room Temperature\", \"device_class\": \"temperature\", \"state_topic\": \"homeassistant/sensor/roomtemperature/state\", \"unique_id\": \"7\"}");
-          delay(20);        
-          mqttclient.publish("homeassistant/sensor/waterpressure/config", "{\"name\": \"Water Pressure\", \"device_class\": \"pressure\", \"state_topic\": \"homeassistant/sensor/waterpressure/state\", \"unique_id\": \"8\"}");
-          delay(20);
-          mqttclient.publish("homeassistant/sensor/dhwsetpoint/config", "{\"name\": \"DHW Setpoint\", \"device_class\": \"temperature\", \"state_topic\": \"homeassistant/sensor/dhwsetpoint/state\", \"unique_id\": \"9\"}");
-          delay(20);
-          mqttclient.publish("homeassistant/sensor/dhwtemperature/config", "{\"name\": \"DHW Temperature\", \"device_class\": \"temperature\", \"state_topic\": \"homeassistant/sensor/dhwtemperature/state\", \"unique_id\": \"10\"}");
-          delay(20);
-          mqttclient.publish("homeassistant/sensor/outtemperature/config", "{\"name\": \"OUT Temperature\", \"device_class\": \"temperature\", \"state_topic\": \"homeassistant/sensor/outtemperature/state\", \"unique_id\": \"11\"}");
-          regMQTTvars = true;
-          mqttrefresh_timenow = millis() + 60000;
-      }
-
-      //process mqtt on a timer
-      if(millis() > time_now_mqtt + 10000)
-      {
-
-        sprintf(buf,"%f", boilerTemperature);
-        mqttclient.publish("homeassistant/sensor/temperature/state", buf);
-
-        sprintf(buf,"%f", boilerRetTemperature);
-        mqttclient.publish("homeassistant/sensor/returntemp/state", buf);
-
-        sprintf(buf,"%f", modulation);
-        mqttclient.publish("homeassistant/sensor/modulation/state", buf);
-
-        if(flameState > 0)
-            sprintf(buf,"ON");
-        else
-            sprintf(buf,"OFF");
-
-        mqttclient.publish("homeassistant/binary_sensor/flame_state/state", buf);
-
-        sprintf(buf,"%f", targetSetpoint);
-        mqttclient.publish("homeassistant/sensor/targetsetpoint/state", buf);
-
-        sprintf(buf,"%f", roomSetpoint);
-        mqttclient.publish("homeassistant/sensor/roomsetpoint/state", buf);   
-
-        sprintf(buf,"%f", roomTemperature);
-        mqttclient.publish("homeassistant/sensor/roomtemperature/state", buf);    
-
-        sprintf(buf,"%f", waterPressure);
-        mqttclient.publish("homeassistant/sensor/waterpressure/state", buf);   
-
-        sprintf(buf,"%f", dhwSetpoint);
-        mqttclient.publish("homeassistant/sensor/dhwsetpoint/state", buf);    
-
-        sprintf(buf,"%f", dhwTemperature);
-        mqttclient.publish("homeassistant/sensor/dhwtemperature/state", buf);
-
-        sprintf(buf,"%f", outTemperature);
-        mqttclient.publish("homeassistant/sensor/outtemperature/state", buf);
-
-        time_now_mqtt = millis();
-      }
-    }
-  }
 }
 
 void loop()
@@ -354,9 +118,9 @@ void loop()
   // must be non-blocking
   wifiProcessing();
 
-  // must be non-blocking
-  if(wifiInitComplete)
-    mqttProcessing();
+  /* Call main tasks for submodules */
+  mqttProcMain();
+  timeProcMain();
 
   //process slave node
   sOT.process();
@@ -574,5 +338,39 @@ void loop()
       time_now = millis();
 
     }
+  }
+
+  /* Calcualte how much time the burner has been active for */
+  if( false != flameState )
+  {
+      /* we need a sample before we work out a delta */
+      if(prevBATime == 0U)
+      {
+          prevBATime = millis();
+      }
+      else
+      {
+          timeBurnerActive_mS += (long)(millis() - prevBATime);
+          prevBATime = millis();
+      }
+
+      tempTime_ms = (timeBurnerActive_mS - 60000);
+
+      if( tempTime_ms >= 0 )
+      {
+          timeBurnerActiveMins++;
+          timeBurnerActive_mS = tempTime_ms;
+      }
+  }
+  else
+  {
+      prevBATime = 0U;
+  }
+
+  /* Check if we need to reset the burner active time
+     based on a new day */
+  if(false != newDayCheck())
+  {
+      timeBurnerActiveMins = 0U;
   }
 }
