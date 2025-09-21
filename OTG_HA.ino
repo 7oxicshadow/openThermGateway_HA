@@ -79,8 +79,14 @@ void IRAM_ATTR sHandleInterrupt() {
 
 void ot_processRequest(unsigned long request, OpenThermResponseStatus status) {
 
-    pendingRequest = request;
-    
+    if(status == OpenThermResponseStatus::SUCCESS)
+    {
+        pendingRequest = request;
+    }
+    else
+    {
+        pendingRequest = 0U;
+    }
     //if(!disable_int)
     //{
     //  Serial.println("T" + String(request, HEX));  //master/thermostat request
@@ -204,8 +210,10 @@ void loop()
     //clear the pending request
     pendingRequest = 0;
 
-    //spec says 100ms delay before next message can be transmitted
-    delay(100);
+    /* The spec says that we cannot transmit for a minimum of 100ms since the end
+       the last response message. We will reset the timer for our custom send
+       requests below. */
+    time_now = millis();
   }
   else
   {
